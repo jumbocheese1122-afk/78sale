@@ -51,10 +51,31 @@ The site has no server, so "marking sold" works like this:
 Buyers can check **Hide sold** in the toolbar to only browse what's still
 available.
 
+## Editing genres
+
+Same Owner Mode, same pattern as sold status:
+
+1. In Owner Mode, every card gets a genre dropdown in place of the plain
+   label text. Pick a different existing genre, or choose **+ New genre…**
+   to type a brand new category — it shows up in the sidebar immediately.
+2. Click **Export genres.json** in the Owner Mode panel to download the
+   updated overrides file.
+3. Replace the repo's `genres.json` with the downloaded file and push:
+
+   ```bash
+   git add genres.json
+   git commit -m "Re-tag genres"
+   git push
+   ```
+
+`genres.json` only stores *overrides* (claim # → genre) for listings you've
+changed — it starts out as `{"overrides": {}}` and stays small.
+
 ## Regenerating the catalog data
 
 `data.js` is generated from the original Discogs export CSV plus a one-time
 Discogs API pass that pulls label photos and genre/style tags (see the
 `build.py` / `fetch_images.py` scripts used to produce it, if you have them).
-`sold.json` and any local Owner Mode state are independent of that
-regeneration — regenerating `data.js` will not affect sold markings.
+`sold.json` and `genres.json` (and any local Owner Mode state) are independent
+of that regeneration — regenerating `data.js` will not affect sold markings
+or genre edits.
