@@ -108,6 +108,16 @@ a{color:inherit;}
 }
 .owner-btn.is-sold{background:#c0392b; color:#fff; border-color:#c0392b;}
 
+.genre-edit-row{margin-top:6px;}
+.genre-edit{
+  width:100%; font-size:12px; font-family:-apple-system,system-ui,sans-serif; padding:3px 6px; border-radius:3px;
+  border:1px solid var(--indigo); background:var(--chip); color:var(--ink);
+}
+.genre-edit-new{
+  width:100%; font-size:12px; font-family:-apple-system,system-ui,sans-serif; padding:3px 6px; border-radius:3px;
+  border:1px solid var(--indigo); background:var(--panel); color:var(--ink);
+}
+
 .toolbar label.hide-sold{display:flex; align-items:center; gap:6px; font-size:13.5px; color:var(--ink-dim); cursor:pointer;}
 
 .owner-panel{
@@ -193,6 +203,67 @@ function toggleSold(claimNo){
   render();
 }
 
+// --- genre overrides ----------------------------------------------------
+// Canonical overrides live in genres.json (committed to the repo). Owner
+// Mode lets the owner re-tag any listing locally, then export an updated
+// genres.json to commit & push so the change goes live for everyone.
+let genreBase = {};   // claim_no -> genre, from genres.json
+let genreLocal = {};  // claim_no -> genre, pending local edits
+
+function loadLocalGenreOverrides(){
+  try{ genreLocal = JSON.parse(localStorage.getItem('genreOverrides') || '{}'); }
+  catch(e){ genreLocal = {}; }
+}
+function saveLocalGenreOverrides(){
+  try{ localStorage.setItem('genreOverrides', JSON.stringify(genreLocal)); }
+  catch(e){}
+}
+function effectiveGenre(r){
+  if(Object.prototype.hasOwnProperty.call(genreLocal, r.claim_no)) return genreLocal[r.claim_no];
+  if(Object.prototype.hasOwnProperty.call(genreBase, r.claim_no)) return genreBase[r.claim_no];
+  return r.genre;
+}
+function setGenre(claimNo, genre, original){
+  genre = (genre || '').trim();
+  if(!genre) return;
+  if(genre === original) delete genreLocal[claimNo];
+  else genreLocal[claimNo] = genre;
+  saveLocalGenreOverrides();
+  render();
+}
+function showNewGenreInput(sel, claimNo, original){
+  const row = sel.parentElement;
+  sel.style.display = 'none';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'genre-edit-new';
+  input.placeholder = 'New genre name…';
+  row.appendChild(input);
+  input.focus();
+  let done = false;
+  function commit(){
+    if(done) return;
+    done = true;
+    const val = input.value.trim();
+    if(val) setGenre(claimNo, val, original);
+    else render();
+  }
+  input.addEventListener('keydown', e => {
+    if(e.key === 'Enter') commit();
+    if(e.key === 'Escape'){ done = true; render(); }
+  });
+  input.addEventListener('blur', commit);
+}
+function allKnownGenres(){
+  const set = new Set();
+  for(const r of RECORDS){
+    set.add(r.genre);
+    if(genreBase[r.claim_no]) set.add(genreBase[r.claim_no]);
+    if(genreLocal[r.claim_no]) set.add(genreLocal[r.claim_no]);
+  }
+  return Array.from(set).sort();
+}
+
 let ownerMode = false;
 function setOwnerMode(on){
   ownerMode = on;
@@ -210,16 +281,19 @@ function renderOwnerPanel(){
       panel.className = 'owner-panel';
       document.body.appendChild(panel);
     }
-    const pendingCount = Object.values(soldLocal).filter(Boolean).length;
     panel.innerHTML = `
       <b>Owner Mode</b>
-      Click "Mark sold" on any card. When you're done, export sold.json and commit it to your GitHub repo to update the live site for everyone.
+      Click "Mark sold" or edit a listing's genre on any card. When you're done, export the updated file(s) and commit them to your GitHub repo to update the live site for everyone.
       <div class="row">
         <button id="exportSoldBtn">Export sold.json</button>
-        <button id="exitOwnerBtn" class="secondary">Exit</button>
+        <button id="exportGenresBtn">Export genres.json</button>
+      </div>
+      <div class="row">
+        <button id="exitOwnerBtn" class="secondary">Exit Owner Mode</button>
       </div>
     `;
     document.getElementById('exportSoldBtn').onclick = exportSoldJson;
+    document.getElementById('exportGenresBtn').onclick = exportGenresJson;
     document.getElementById('exitOwnerBtn').onclick = () => setOwnerMode(false);
     if(link) link.remove();
   } else {
@@ -248,8 +322,27 @@ function exportSoldJson(){
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
+function exportGenresJson(){
+  const merged = Object.assign({}, genreBase);
+  Object.keys(genreLocal).forEach(k => { merged[k] = genreLocal[k]; });
+  // drop overrides that just restate the record's original heuristic/Discogs genre
+  const byClaim = {};
+  RECORDS.forEach(r => byClaim[r.claim_no] = r.genre);
+  Object.keys(merged).forEach(k => { if(merged[k] === byClaim[k]) delete merged[k]; });
+  const payload = { overrides: merged };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'genres.json';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
 
 loadLocalOverrides();
+loadLocalGenreOverrides();
 try{ ownerMode = localStorage.getItem('ownerMode') === '1'; }catch(e){}
 if(new URLSearchParams(location.search).get('owner') === '1') ownerMode = true;
 
@@ -257,11 +350,13 @@ function esc(s){
   return (s||"").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
-const genreCounts = {};
-for(const r of RECORDS) genreCounts[r.genre] = (genreCounts[r.genre]||0) + 1;
-const genresSorted = Object.keys(genreCounts).sort((a,b)=>genreCounts[b]-genreCounts[a]);
-
 function buildSidebar(){
+  const genreCounts = {};
+  for(const r of RECORDS){
+    const g = effectiveGenre(r);
+    genreCounts[g] = (genreCounts[g]||0) + 1;
+  }
+  const genresSorted = Object.keys(genreCounts).sort((a,b)=>genreCounts[b]-genreCounts[a]);
   genreList.innerHTML = '';
   const allLi = document.createElement('li');
   allLi.innerHTML = `<a data-g="" class="${activeGenre===''?'active':''}">All genres <span class="n">${RECORDS.length}</span></a>`;
@@ -292,7 +387,7 @@ function render(){
   const q = searchEl.value.trim().toLowerCase();
   const hideSold = hideSoldEl.checked;
   let items = RECORDS.filter(r => {
-    if(activeGenre && r.genre !== activeGenre) return false;
+    if(activeGenre && effectiveGenre(r) !== activeGenre) return false;
     if(hideSold && isSold(r.claim_no)) return false;
     if(!q) return true;
     return (r.artist+" "+r.title+" "+r.label+" "+r.catno).toLowerCase().includes(q);
@@ -314,15 +409,17 @@ function render(){
     return;
   }
 
+  const knownGenres = ownerMode ? allKnownGenres() : [];
   const frag = document.createDocumentFragment();
   for(const r of items){
     const sold = isSold(r.claim_no);
+    const genre = effectiveGenre(r);
     const div = document.createElement('div');
     div.className = 'card' + (sold ? ' sold' : '');
     div.innerHTML = `
       <div class="imgwrap">
         ${artHtml(r)}
-        <span class="genre-badge">${esc(r.genre)}</span>
+        <span class="genre-badge">${esc(genre)}</span>
         ${sold ? '<span class="sold-ribbon">Sold</span>' : ''}
       </div>
       <div class="bottom">
@@ -333,6 +430,13 @@ function render(){
         <div class="artist">${esc(r.artist)}</div>
         <div class="title">${esc(r.title)}</div>
         <div class="label">${esc(r.label)} &middot; Cat# ${esc(r.catno)}</div>
+        ${ownerMode ? `
+        <div class="genre-edit-row">
+          <select class="genre-edit" data-claim="${esc(r.claim_no)}" data-original="${esc(r.genre)}">
+            ${knownGenres.map(g => `<option value="${esc(g)}"${g===genre?' selected':''}>${esc(g)}</option>`).join('')}
+            <option value="__new__">+ New genre&hellip;</option>
+          </select>
+        </div>` : ''}
         <div class="claim">
           Claim # <b>${esc(r.claim_no || '')}</b>
           ${ownerMode ? `<button class="owner-btn${sold?' is-sold':''}" data-claim="${esc(r.claim_no)}">${sold?'Mark available':'Mark sold'}</button>` : ''}
@@ -346,6 +450,17 @@ function render(){
   if(ownerMode){
     grid.querySelectorAll('.owner-btn').forEach(btn => {
       btn.addEventListener('click', () => toggleSold(btn.dataset.claim));
+    });
+    grid.querySelectorAll('.genre-edit').forEach(sel => {
+      sel.addEventListener('change', () => {
+        const claim = sel.dataset.claim;
+        const original = sel.dataset.original;
+        if(sel.value === '__new__'){
+          showNewGenreInput(sel, claim, original);
+        } else {
+          setGenre(claim, sel.value, original);
+        }
+      });
     });
   }
   renderOwnerPanel();
@@ -362,10 +477,21 @@ async function loadSoldJson(){
     // sold.json not reachable (e.g. opened as a local file without a server) -- fine, starts empty
   }
 }
+async function loadGenresJson(){
+  try{
+    const res = await fetch('genres.json', {cache:'no-store'});
+    if(res.ok){
+      const data = await res.json();
+      genreBase = data.overrides || {};
+    }
+  }catch(e){
+    // genres.json not reachable -- fine, starts empty
+  }
+}
 
 searchEl.addEventListener('input', render);
 sortEl.addEventListener('change', render);
 hideSoldEl.addEventListener('change', render);
-loadSoldJson().then(render);
+Promise.all([loadSoldJson(), loadGenresJson()]).then(render);
 renderOwnerPanel();
 </script>
